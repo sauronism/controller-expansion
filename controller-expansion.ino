@@ -75,203 +75,203 @@ short motorTargetPwmValue = 0;                          // allowing small increm
 typedef StaticJsonDocument<256> Packet;
 
 typedef struct {
-  short motor_on;
-  short smoke_on;
-  short beam_on;
-  short beam_x;
-  short beam_y;
-  short beam_speed;  
+	short motor_on;
+	short smoke_on;
+	short beam_on;
+	short beam_x;
+	short beam_y;
+	short beam_speed;  
 } cmd_t;
 
-short getJsonProperty(Packet pkt, char* propertyName){
-  return pkt.containsKey(propertyName) ? pkt[propertyName].as<short>() : NO_OP;
+short getJsonProperty(Packet pkt, char* propertyName) {
+	return pkt.containsKey(propertyName) ? pkt[propertyName].as<short>() : NO_OP;
 }
 
-cmd_t parseCommand(Packet pkt){
-  cmd_t command;
+cmd_t parseCommand(Packet pkt) {
+	cmd_t command;
 
-  command.motor_on = getJsonProperty(pkt, "motor_on");
-  command.smoke_on = getJsonProperty(pkt, "smoke_on");
-  command.beam_on = getJsonProperty(pkt, "beam_on");
-  command.beam_x = getJsonProperty(pkt, "beam_x");
-  command.beam_y = getJsonProperty(pkt, "beam_y");
-  command.beam_speed = getJsonProperty(pkt, "beam_speed");
-  
-  if (DEBUG_ENABLED){
-    char msg[256];
-    sprintf(msg,
-            "Command:\nmotor_on: %d \nsmoke_on: %d \nbeam_on: %d \nbeam_x: %d \nbeam_y: %d \nbeam_speed: %d \n",
-            command.motor_on,
-            command.smoke_on,
-            command.beam_on,
-            command.beam_x,
-            command.beam_y,
-            command.beam_speed);
-     Serial.println(msg);
-  }
- return command;
+	command.motor_on = getJsonProperty(pkt, "motor_on");
+	command.smoke_on = getJsonProperty(pkt, "smoke_on");
+	command.beam_on = getJsonProperty(pkt, "beam_on");
+	command.beam_x = getJsonProperty(pkt, "beam_x");
+	command.beam_y = getJsonProperty(pkt, "beam_y");
+	command.beam_speed = getJsonProperty(pkt, "beam_speed");
+
+	if (DEBUG_ENABLED) {
+		char msg[256];
+		sprintf(msg,
+			"Command:\nmotor_on: %d \nsmoke_on: %d \nbeam_on: %d \nbeam_x: %d \nbeam_y: %d \nbeam_speed: %d \n",
+			command.motor_on,
+			command.smoke_on,
+			command.beam_on,
+			command.beam_x,
+			command.beam_y,
+			command.beam_speed);
+		Serial.println(msg);
+	}
+	return command;
 }
 
-boolean readCommandJson(Packet& pkt){
-  if (Serial.available()) {
-    String pktString = Serial.readStringUntil('\0');    
-    if (DEBUG_ENABLED){
-      Serial.println(pktString);
-    }
-    
-    DeserializationError error = deserializeJson(pkt, pktString);
-    if (error) {
-      if (DEBUG_ENABLED){
-        Serial.print("Error parsing JSON: ");
-        Serial.println(error.c_str());
-      }
-    } else {
-      return true;
-    }
-  }
-  return false;
+boolean readCommandJson(Packet& pkt) {
+	if (Serial.available()) {
+		String pktString = Serial.readStringUntil('\0');    
+		if (DEBUG_ENABLED) {
+			Serial.println(pktString);
+		}
+
+		DeserializationError error = deserializeJson(pkt, pktString);
+		if (error) {
+			if (DEBUG_ENABLED) {
+				Serial.print("Error parsing JSON: ");
+				Serial.println(error.c_str());
+			}
+		} else {
+			return true;
+		}
+	}
+	return false;
 }
 
-void accelerateMotorSingleStep(){
-  short delta = (motorCurrentPwmValue > motorTargetPwmValue) ? -1 : 1;
-  motorCurrentPwmValue += delta;
-  analogWrite(MOTOR_RPWM_OUTPUT, motorCurrentPwmValue);
-  delay(MOTOR_ACCELERATION_DELAY_MILLIS); 
-  if (DEBUG_ENABLED){
-    Serial.print(motorCurrentPwmValue);
-    Serial.print("/");
-    Serial.println(motorTargetPwmValue);
-  }
+void accelerateMotorSingleStep() {
+	short delta = (motorCurrentPwmValue > motorTargetPwmValue) ? -1 : 1;
+	motorCurrentPwmValue += delta;
+	analogWrite(MOTOR_RPWM_OUTPUT, motorCurrentPwmValue);
+	delay(MOTOR_ACCELERATION_DELAY_MILLIS); 
+	if (DEBUG_ENABLED) {
+		Serial.print(motorCurrentPwmValue);
+		Serial.print("/");
+		Serial.println(motorTargetPwmValue);
+	}
 }
 
-void accelerateMotor(){
-  if (MOTOR_CTRL_NON_BLOCKING_ENABLED){
-    return;
-  }
-  while (motorCurrentPwmValue != motorTargetPwmValue){
-    accelerateMotorSingleStep();
-  }
+void accelerateMotor() {
+	if (MOTOR_CTRL_NON_BLOCKING_ENABLED) {
+		return;
+	}
+	while (motorCurrentPwmValue != motorTargetPwmValue) {
+		accelerateMotorSingleStep();
+	}
 }
 
-void startMotor(){
-  motorTargetPwmValue = MOTOR_MAX_PWM_VALUE;
-  accelerateMotor();
+void startMotor() {
+	motorTargetPwmValue = MOTOR_MAX_PWM_VALUE;
+	accelerateMotor();
 }
 
-void stopMotor(){
-  motorTargetPwmValue = 0;
-  accelerateMotor();
+void stopMotor() {
+	motorTargetPwmValue = 0;
+	accelerateMotor();
 }
 
-short normalizeValue(short value, short maxValue){
-  short normalized = map(value, 0, maxValue, 0, 255);
-  return normalized;
+short normalizeValue(short value, short maxValue) {
+	short normalized = map(value, 0, maxValue, 0, 255);
+	return normalized;
 }
 
-void executeCommand(cmd_t command){
-  if (command.motor_on == TRUE){
-    startMotor();
-  }
-  if (command.motor_on == FALSE){
-    stopMotor();
-  }
-  if (command.smoke_on == TRUE){
-    DmxSimple.write(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_ON);
-  }
-  if (command.smoke_on == FALSE){
-    DmxSimple.write(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_OFF);
-  }
-  if (command.beam_on == TRUE){
-    DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_RESET); 
-//    DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_ON); // TODO: lamp doesn't respond to ON, only reset, even manually
-    DmxSimple.write(DIMMER_CHANNEL, DIMMER_MAX_BRIGHTNESS);
-  }
-  if (command.beam_on == FALSE){
-    DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_OFF);
-    DmxSimple.write(DIMMER_CHANNEL, 0);
-  }
-  if (command.beam_speed != NO_OP){
-    DmxSimple.write(PAN_TILT_SPEED_CHANNEL, command.beam_speed);
-  }
-  if (command.beam_x != NO_OP){
-    short normalizedVal = normalizeValue(command.beam_x, PAN_MAX_ANGLE);
-    DmxSimple.write(PAN_X_AXIS_CHANNEL, normalizedVal);
-  }
-  if (command.beam_y != NO_OP){
-    short normalizedVal = normalizeValue(command.beam_y, TILT_MAX_ANGLE);
-    DmxSimple.write(PAN_X_AXIS_CHANNEL, normalizedVal);
-  }
+void executeCommand(cmd_t command) {
+	if (command.motor_on == TRUE) {
+		startMotor();
+	}
+	if (command.motor_on == FALSE) {
+		stopMotor();
+	}
+	if (command.smoke_on == TRUE) {
+		DmxSimple.write(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_ON);
+	}
+	if (command.smoke_on == FALSE) {
+		DmxSimple.write(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_OFF);
+	}
+	if (command.beam_on == TRUE) {
+		DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_RESET); 
+		// DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_ON); // TODO: lamp doesn't respond to ON, only reset, even manually
+		DmxSimple.write(DIMMER_CHANNEL, DIMMER_MAX_BRIGHTNESS);
+	}
+	if (command.beam_on == FALSE) {
+		DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_OFF);
+		DmxSimple.write(DIMMER_CHANNEL, 0);
+	}
+	if (command.beam_speed != NO_OP) {
+		DmxSimple.write(PAN_TILT_SPEED_CHANNEL, command.beam_speed);
+	}
+	if (command.beam_x != NO_OP) {
+		short normalizedVal = normalizeValue(command.beam_x, PAN_MAX_ANGLE);
+		DmxSimple.write(PAN_X_AXIS_CHANNEL, normalizedVal);
+	}
+	if (command.beam_y != NO_OP) {
+		short normalizedVal = normalizeValue(command.beam_y, TILT_MAX_ANGLE);
+		DmxSimple.write(PAN_X_AXIS_CHANNEL, normalizedVal);
+	}
 }
 
-void initPins(){
-  pinMode(MOTOR_RPWM_OUTPUT, OUTPUT);
-  pinMode(MOTOR_LPWM_OUTPUT, OUTPUT);
+void initPins() {
+	pinMode(MOTOR_RPWM_OUTPUT, OUTPUT);
+	pinMode(MOTOR_LPWM_OUTPUT, OUTPUT);
 }
 
-void initMotor(){
-  analogWrite(MOTOR_LPWM_OUTPUT, 0);
+void initMotor() {
+	analogWrite(MOTOR_LPWM_OUTPUT, 0);
 }
 
-void initDmx(){
-  DmxSimple.maxChannel(DMX_MASTER_CHANNELS);
-  DmxSimple.usePin(DMX_RX_PIN); 
+void initDmx() {
+	DmxSimple.maxChannel(DMX_MASTER_CHANNELS);
+	DmxSimple.usePin(DMX_RX_PIN); 
 }
 
-void initBeam(){
-  DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_RESET);
-  DmxSimple.write(COLOR_CHANNEL, COLOR_WHITE);
-  DmxSimple.write(STROBE_CHANNEL, STROBE_OPEN);
-  DmxSimple.write(GOBO_CHANNEL, BEAM_GOBO_ENABLED ? GOBO_DISABLED : GOBO_BOBBING_MOTION);
-  DmxSimple.write(FOCUS_CHANNEL, FOCUS_MAX);
-  DmxSimple.write(FROST_CHANNEL, BEAM_FROST_ENABLED ? FROST_DISABLED : FROST_BLUR);
+void initBeam() {
+	DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_RESET);
+	DmxSimple.write(COLOR_CHANNEL, COLOR_WHITE);
+	DmxSimple.write(STROBE_CHANNEL, STROBE_OPEN);
+	DmxSimple.write(GOBO_CHANNEL, BEAM_GOBO_ENABLED ? GOBO_DISABLED : GOBO_BOBBING_MOTION);
+	DmxSimple.write(FOCUS_CHANNEL, FOCUS_MAX);
+	DmxSimple.write(FROST_CHANNEL, BEAM_FROST_ENABLED ? FROST_DISABLED : FROST_BLUR);
 }
 
 void setup() {
-  initPins();
-  initMotor();
-  initDmx();
-  initBeam();
-  Serial.begin(9600);
+	initPins();
+	initMotor();
+	initDmx();
+	initBeam();
+	Serial.begin(9600);
 }
 
 void test() {
-  const int DMX_CMD_DELAY_MILLIS = 100;
-  for (int value = 0; value <= 255; value++) {
-    DmxSimple.write(PAN_X_AXIS_CHANNEL, value);
-    DmxSimple.write(TILT_Y_AXIS_CHANNEL, value);
-    delay(DMX_CMD_DELAY_MILLIS); 
-  }
+	const int DMX_CMD_DELAY_MILLIS = 100;
+	for (int value = 0; value <= 255; value++) {
+		DmxSimple.write(PAN_X_AXIS_CHANNEL, value);
+		DmxSimple.write(TILT_Y_AXIS_CHANNEL, value);
+		delay(DMX_CMD_DELAY_MILLIS); 
+	}
 }
 
-void executeNonBlockingOperations(){
-  if (MOTOR_CTRL_NON_BLOCKING_ENABLED && (motorCurrentPwmValue != motorTargetPwmValue)) {
-    accelerateMotorSingleStep();
-  }
+void executeNonBlockingOperations() {
+	if (MOTOR_CTRL_NON_BLOCKING_ENABLED && (motorCurrentPwmValue != motorTargetPwmValue)) {
+		accelerateMotorSingleStep();
+	}
 }
 
-void dmxTest(){
-  if (!DEBUG_ENABLED){
-    return;
-  }
-  for (int i = 1; i <= DMX_MASTER_CHANNELS; i++){
-    DmxSimple.write(i, 255);  
-    Serial.println(i);
-  }
-  delay(500);
+void dmxTest() {
+	if (!DEBUG_ENABLED) {
+		return;
+	}
+	for (int i = 1; i <= DMX_MASTER_CHANNELS; i++) {
+		DmxSimple.write(i, 255);  
+		Serial.println(i);
+	}
+	delay(500);
 
-  for (int i = 1; i <= DMX_MASTER_CHANNELS; i++){
-    DmxSimple.write(i, 0);  
-    Serial.println(i);
-  }
-  delay(500);
+	for (int i = 1; i <= DMX_MASTER_CHANNELS; i++) {
+		DmxSimple.write(i, 0);  
+		Serial.println(i);
+	}
+	delay(500);
 }
 
 void loop() {
-    Packet pkt;    
-    int success = readCommandJson(pkt);
-    if (success){
-        cmd_t command = parseCommand(pkt);
-        executeCommand(command);
-    }
-    executeNonBlockingOperations();
+	Packet pkt;    
+	int success = readCommandJson(pkt);
+	if (success) {
+		cmd_t command = parseCommand(pkt);
+		executeCommand(command);
+	}
+	executeNonBlockingOperations();
 }
