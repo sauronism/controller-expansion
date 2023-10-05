@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include <DmxSimple.h>
 
+
 // command constants
 #define TRUE   1
 #define FALSE  0
@@ -45,29 +46,31 @@
 #define SMOKE_MACHINE_ON        255
 
 // configuration
-const boolean DEBUG_ENABLED = true;
-const boolean BEAM_FROST_ENABLED = true;
-const boolean BEAM_GOBO_ENABLED = true;
-const boolean MOTOR_CTRL_NON_BLOCKING_ENABLED = true;
+const boolean DEBUG_ENABLED = true;                     // enables debug prints
+const boolean BEAM_FROST_ENABLED = true;                // enables an aesthetic fade effect in the edges of the beam
+const boolean BEAM_GOBO_ENABLED = true;                 // enables a light bobbing motion of the beam which can be pretty
+const boolean MOTOR_CTRL_NON_BLOCKING_ENABLED = true;   // enables sending commands while the motor accelerates/decelerates
 
 // DMX Shield constants
 // RX(0) is connected to pin 3 by default (see DMX_RX_PIN) - jumper connected to RX-io
 // TX(1) is connected to GND (Arduino is the master)
 // DE(2) is connected to 5V - jumper connected to DE
 // EN jumper is connceted to EN (default is ~EN)
-const int DMX_RX_PIN = 7;           // default pin is 3, used 7 for Nano
-const int DMX_MASTER_CHANNELS = 512; // default is 512
+const int DMX_RX_PIN = 3;                               // default pin is 3, used 7 for Nano
+const int DMX_MASTER_CHANNELS = 256;                    // default is 512
 const int SMOKE_MACHINE_CHANNEL = 22;
 
 // Motor constants
-// L_IS and R_IS not connected 
-const int MOTOR_RPWM_OUTPUT = 9;                // Arduino PWM output pin D9; connect to IBT-2 pin 1 (RPWM)
-const int MOTOR_LPWM_OUTPUT = 10;               // Arduino PWM output pin D10; connect to IBT-2 pin 2 (LPWM)
-const int MOTOR_ACCELERATION_DELAY_MILLIS = 50;  // Adjust this delay to control the speed of acceleration/deceleration
+// R_EN and L_EN connected to VCC (IBT-2 pins 3 & 4)
+// L_IS and R_IS not connected    (IBT-2 pins 5 & 6)
+const int MOTOR_RPWM_OUTPUT = 5;                        // Arduino PWM output pin D9; connect to IBT-2 pin 1 (RPWM)
+const int MOTOR_LPWM_OUTPUT = 6;                        // Arduino PWM output pin D10; connect to IBT-2 pin 2 (LPWM)
+const int MOTOR_MAX_PWM_VALUE = 100;                    // Adjust this delay to control the maximum speed of the motor
+const int MOTOR_ACCELERATION_DELAY_MILLIS = 30;         // Adjust this delay to control the speed of acceleration/deceleration
 
 // motor state
-short motorCurrentPwmValue = 0;                 // tracking the current PWM value to ensure smooth transitions in case of duplicate commands
-short motorTargetPwmValue = 0;                  // allowing small incremets with short delays in a non blocking manner until the desired state is reached
+short motorCurrentPwmValue = 0;                         // tracking the current PWM value to ensure smooth transitions in case of duplicate commands
+short motorTargetPwmValue = 0;                          // allowing small incremets with short delays in a non blocking manner until the desired state is reached
 
 typedef StaticJsonDocument<256> Packet;
 
@@ -129,24 +132,6 @@ boolean readCommandJson(Packet& pkt){
   return false;
 }
 
-//void startMotor(){
-//  motorTargetPwmValue = 255;
-//  for (int pwmValue = motorCurrentPwmValue; pwmValue <= motorTargetPwmValue; pwmValue++) {
-//    motorCurrentPwmValue = pwmValue;
-//    analogWrite(MOTOR_RPWM_OUTPUT, pwmValue);
-//    delay(MOTOR_ACCELERATION_DELAY_MILLIS); 
-//  }
-//}
-//
-//void stopMotor(){
-//  motorTargetPwmValue = 0;
-//  for (int pwmValue = motorCurrentPwmValue; pwmValue >= motorTargetPwmValue; pwmValue--) {
-//    motorCurrentPwmValue = pwmValue;
-//    analogWrite(MOTOR_RPWM_OUTPUT, pwmValue);
-//    delay(MOTOR_ACCELERATION_DELAY_MILLIS); 
-//  }
-//}
-
 void accelerateMotorSingleStep(){
   short delta = (motorCurrentPwmValue > motorTargetPwmValue) ? -1 : 1;
   motorCurrentPwmValue += delta;
@@ -169,7 +154,7 @@ void accelerateMotor(){
 }
 
 void startMotor(){
-  motorTargetPwmValue = 255;
+  motorTargetPwmValue = MOTOR_MAX_PWM_VALUE;
   accelerateMotor();
 }
 
@@ -262,6 +247,23 @@ void executeNonBlockingOperations(){
   if (MOTOR_CTRL_NON_BLOCKING_ENABLED && (motorCurrentPwmValue != motorTargetPwmValue)) {
     accelerateMotorSingleStep();
   }
+}
+
+void dmxTest(){
+  if (!DEBUG_ENABLED){
+    return;
+  }
+  for (int i = 1; i <= DMX_MASTER_CHANNELS; i++){
+    DmxSimple.write(i, 255);  
+    Serial.println(i);
+  }
+  delay(500);
+
+  for (int i = 1; i <= DMX_MASTER_CHANNELS; i++){
+    DmxSimple.write(i, 0);  
+    Serial.println(i);
+  }
+  delay(500);
 }
 
 void loop() {
