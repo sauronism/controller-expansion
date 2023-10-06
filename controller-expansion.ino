@@ -65,7 +65,7 @@ const int SMOKE_MACHINE_CHANNEL = 22;
 // L_IS and R_IS not connected    (IBT-2 pins 5 & 6)
 const int MOTOR_RPWM_OUTPUT = 5;                        // Arduino PWM output pin D9; connect to IBT-2 pin 1 (RPWM)
 const int MOTOR_LPWM_OUTPUT = 6;                        // Arduino PWM output pin D10; connect to IBT-2 pin 2 (LPWM)
-const int MOTOR_MAX_PWM_VALUE = 100;                    // Adjust this delay to control the maximum speed of the motor
+const int MOTOR_MAX_PWM_VALUE = 255;                    // Adjust this delay to control the maximum speed of the motor
 const int MOTOR_ACCELERATION_DELAY_MILLIS = 30;         // Adjust this delay to control the speed of acceleration/deceleration
 
 // motor state
@@ -90,12 +90,12 @@ short getJsonProperty(Packet pkt, char* propertyName) {
 cmd_t parseCommand(Packet pkt) {
 	cmd_t command;
 
-	command.motor_on = getJsonProperty(pkt, "motor_on");
-	command.smoke_on = getJsonProperty(pkt, "smoke_on");
-	command.beam_on = getJsonProperty(pkt, "beam_on");
-	command.beam_x = getJsonProperty(pkt, "beam_x");
-	command.beam_y = getJsonProperty(pkt, "beam_y");
-	command.beam_speed = getJsonProperty(pkt, "beam_speed");
+	command.motor_on = getJsonProperty(pkt, "m");
+	command.smoke_on = getJsonProperty(pkt, "s");
+	command.beam_on = getJsonProperty(pkt, "b");
+	command.beam_x = getJsonProperty(pkt, "x");
+	command.beam_y = getJsonProperty(pkt, "y");
+	command.beam_speed = getJsonProperty(pkt, "v");
 
 	if (DEBUG_ENABLED) {
 		char msg[256];
