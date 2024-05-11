@@ -56,8 +56,10 @@ const boolean MOTOR_CTRL_NON_BLOCKING_ENABLED = true;   // enables sending comma
 // TX(1) is connected to GND (Arduino is the master)
 // DE(2) is connected to 5V - jumper connected to DE
 // EN jumper is connceted to EN (default is ~EN)
-const int DMX_RX_PIN = 3;                               // default pin is 3, used 7 for Nano
-const int DMX_MASTER_CHANNELS = 256;                    // default is 512
+const int DMX_TX_PIN = 3;                               // default pin is 3, used 7 for Nano
+const int DMX_MODE_SELECT_PIN = 2;                      // default pin is 2
+
+const int DMX_MASTER_CHANNELS = 512;                    // default is 512
 const int SMOKE_MACHINE_CHANNEL = 22;
 
 // Motor constants
@@ -203,18 +205,18 @@ void executeCommand(cmd_t command) {
 	}
 }
 
-void initPins() {
+void initMotor() {
 	pinMode(MOTOR_RPWM_OUTPUT, OUTPUT);
 	pinMode(MOTOR_LPWM_OUTPUT, OUTPUT);
-}
-
-void initMotor() {
 	analogWrite(MOTOR_LPWM_OUTPUT, 0);
 }
 
 void initDmx() {
+	pinMode(DMX_MODE_SELECT_PIN, OUTPUT);
+	delay(10);
+	digitalWrite(DMX_MODE_SELECT_PIN, HIGH);
 	DmxSimple.maxChannel(DMX_MASTER_CHANNELS);
-	DmxSimple.usePin(DMX_RX_PIN); 
+	DmxSimple.usePin(DMX_TX_PIN); 
 }
 
 void initBeam() {
@@ -227,11 +229,13 @@ void initBeam() {
 }
 
 void setup() {
-	initPins();
 	initMotor();
 	initDmx();
 	initBeam();
+
+	delay(500);
 	Serial.begin(9600);
+	Serial.println("Setup complete.");
 }
 
 void test() {
@@ -253,25 +257,27 @@ void dmxTest() {
 	if (!DEBUG_ENABLED) {
 		return;
 	}
-	for (int i = 1; i <= DMX_MASTER_CHANNELS; i++) {
-		DmxSimple.write(i, 255);  
-		Serial.println(i);
+	
+	for (int val = 0; val < 256; val += 127) {
+		delay(1000);
+		Serial.println(val);
+		for (int chan = 1; chan <= DMX_MASTER_CHANNELS; chan++) {
+			DmxSimple.write(chan, val);  
+		}
 	}
-	delay(500);
-
-	for (int i = 1; i <= DMX_MASTER_CHANNELS; i++) {
-		DmxSimple.write(i, 0);  
-		Serial.println(i);
-	}
-	delay(500);
 }
 
-void loop() {
-	Packet pkt;    
+void readAndExecuteCommand() {
+	Packet pkt;
 	int success = readCommandJson(pkt);
 	if (success) {
 		cmd_t command = parseCommand(pkt);
 		executeCommand(command);
 	}
 	executeNonBlockingOperations();
+}
+
+void loop() {
+  readAndExecuteCommand();
+//   dmxTest();
 }
