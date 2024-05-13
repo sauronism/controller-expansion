@@ -4,7 +4,11 @@
 
 #include <ArduinoJson.h>
 #include <DmxSimple.h>
+#include <Conceptinetics.h>
 
+// DMX library constants
+#define DMX_MASTER_CHANNELS   16 
+#define RXEN_PIN              2
 
 // command constants
 #define TRUE   1
@@ -46,6 +50,7 @@
 #define SMOKE_MACHINE_ON        255
 
 // configuration
+const boolean USE_CONCEPTINETICS = true;                // use Conceptinetics library as an alternative to DmxSimple
 const boolean DEBUG_ENABLED = true;                     // enables debug prints
 const boolean BEAM_FROST_ENABLED = true;                // enables an aesthetic fade effect in the edges of the beam
 const boolean BEAM_GOBO_ENABLED = true;                 // enables a light bobbing motion of the beam which can be pretty
@@ -84,6 +89,9 @@ typedef struct {
 	short beam_y;
 	short beam_speed;  
 } cmd_t;
+
+DMX_Master dmx_master(DMX_MASTER_CHANNELS, RXEN_PIN);
+
 
 short getJsonProperty(Packet pkt, char* propertyName) {
 	return pkt.containsKey(propertyName) ? pkt[propertyName].as<short>() : NO_OP;
@@ -170,6 +178,18 @@ short normalizeValue(short value, short maxValue) {
 	return normalized;
 }
 
+int dmx_channels_state[DMX_MASTER_CHANNELS];
+
+void writeDMX(int chan, int value){
+  if (USE_CONCEPTINETICS) {
+    dmx_channels_state[chan] = value;
+  }
+  else {
+    DmxSimple.write(chan, val);
+  }
+  
+}
+
 void executeCommand(cmd_t command) {
 	if (command.motor_on == TRUE) {
 		startMotor();
@@ -178,30 +198,30 @@ void executeCommand(cmd_t command) {
 		stopMotor();
 	}
 	if (command.smoke_on == TRUE) {
-		DmxSimple.write(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_ON);
+		writeDMX(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_ON);
 	}
 	if (command.smoke_on == FALSE) {
-		DmxSimple.write(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_OFF);
+		writeDMX(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_OFF);
 	}
 	if (command.beam_on == TRUE) {
-		DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_RESET); 
-		// DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_ON); // TODO: lamp doesn't respond to ON, only reset, even manually
-		DmxSimple.write(DIMMER_CHANNEL, DIMMER_MAX_BRIGHTNESS);
+		writeDMX(LAMP_CTRL_RESET_CHANNEL, LAMP_RESET); 
+		// writeDMX(LAMP_CTRL_RESET_CHANNEL, LAMP_ON); // TODO: lamp doesn't respond to ON, only reset, even manually
+		writeDMX(DIMMER_CHANNEL, DIMMER_MAX_BRIGHTNESS);
 	}
 	if (command.beam_on == FALSE) {
-		DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_OFF);
-		DmxSimple.write(DIMMER_CHANNEL, 0);
+		writeDMX(LAMP_CTRL_RESET_CHANNEL, LAMP_OFF);
+		writeDMX(DIMMER_CHANNEL, 0);
 	}
 	if (command.beam_speed != NO_OP) {
-		DmxSimple.write(PAN_TILT_SPEED_CHANNEL, command.beam_speed);
+		writeDMX(PAN_TILT_SPEED_CHANNEL, command.beam_speed);
 	}
 	if (command.beam_x != NO_OP) {
 		short normalizedVal = normalizeValue(command.beam_x, PAN_MAX_ANGLE);
-		DmxSimple.write(PAN_X_AXIS_CHANNEL, normalizedVal);
+		writeDMX(PAN_X_AXIS_CHANNEL, normalizedVal);
 	}
 	if (command.beam_y != NO_OP) {
 		short normalizedVal = normalizeValue(command.beam_y, TILT_MAX_ANGLE);
-		DmxSimple.write(PAN_X_AXIS_CHANNEL, normalizedVal);
+		writeDMX(PAN_X_AXIS_CHANNEL, normalizedVal);
 	}
 }
 
@@ -212,20 +232,25 @@ void initMotor() {
 }
 
 void initDmx() {
-	pinMode(DMX_MODE_SELECT_PIN, OUTPUT);
-	delay(10);
-	digitalWrite(DMX_MODE_SELECT_PIN, HIGH);
-	DmxSimple.maxChannel(DMX_MASTER_CHANNELS);
-	DmxSimple.usePin(DMX_TX_PIN); 
+  if (USE_CONCEPTINETICS) {
+    dmx_master.enable();  
+  }
+  else {
+    pinMode(DMX_MODE_SELECT_PIN, OUTPUT);
+    delay(10);
+    digitalWrite(DMX_MODE_SELECT_PIN, HIGH);
+    DmxSimple.maxChannel(DMX_MASTER_CHANNELS);
+    DmxSimple.usePin(DMX_TX_PIN); 
+  }
 }
 
 void initBeam() {
-	DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_RESET);
-	DmxSimple.write(COLOR_CHANNEL, COLOR_WHITE);
-	DmxSimple.write(STROBE_CHANNEL, STROBE_OPEN);
-	DmxSimple.write(GOBO_CHANNEL, BEAM_GOBO_ENABLED ? GOBO_DISABLED : GOBO_BOBBING_MOTION);
-	DmxSimple.write(FOCUS_CHANNEL, FOCUS_MAX);
-	DmxSimple.write(FROST_CHANNEL, BEAM_FROST_ENABLED ? FROST_DISABLED : FROST_BLUR);
+	writeDMX(LAMP_CTRL_RESET_CHANNEL, LAMP_RESET);
+	writeDMX(COLOR_CHANNEL, COLOR_WHITE);
+	writeDMX(STROBE_CHANNEL, STROBE_OPEN);
+	writeDMX(GOBO_CHANNEL, BEAM_GOBO_ENABLED ? GOBO_DISABLED : GOBO_BOBBING_MOTION);
+	writeDMX(FOCUS_CHANNEL, FOCUS_MAX);
+	writeDMX(FROST_CHANNEL, BEAM_FROST_ENABLED ? FROST_DISABLED : FROST_BLUR);
 }
 
 void setup() {
@@ -251,6 +276,14 @@ void executeNonBlockingOperations() {
 	if (MOTOR_CTRL_NON_BLOCKING_ENABLED && (motorCurrentPwmValue != motorTargetPwmValue)) {
 		accelerateMotorSingleStep();
 	}
+  if (USE_CONCEPTINETICS) {
+    for (int i = 0; i <= 10; i++) {
+      for (int chan = 1; chan <= DMX_MASTER_CHANNELS; chan++) {
+            dmx_master.setChannelValue(chan, dmx_channels_state[chan]);
+      }
+      delay(5);
+		}
+  }
 }
 
 void dmxTest() {
@@ -262,7 +295,7 @@ void dmxTest() {
 		delay(1000);
 		Serial.println(val);
 		for (int chan = 1; chan <= DMX_MASTER_CHANNELS; chan++) {
-			DmxSimple.write(chan, val);  
+			writeDMX(chan, val);  
 		}
 	}
 }
@@ -278,6 +311,6 @@ void readAndExecuteCommand() {
 }
 
 void loop() {
-  readAndExecuteCommand();
-//   dmxTest();
+  // readAndExecuteCommand();
+  dmxTest();
 }
