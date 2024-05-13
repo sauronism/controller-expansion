@@ -1,9 +1,6 @@
 #include <ArduinoJson.h>
-#include <Conceptinetics.h>
+#include <DmxSimple.h>
 
-// DMX library constants
-#define DMX_MASTER_CHANNELS   16 
-#define RXEN_PIN              2
 
 // command constants
 #define TRUE   1
@@ -51,13 +48,14 @@ const boolean BEAM_GOBO_ENABLED = true;                 // enables a light bobbi
 const boolean MOTOR_CTRL_NON_BLOCKING_ENABLED = true;   // enables sending commands while the motor accelerates/decelerates
 
 // DMX Shield constants
-// RX(0) - middle pin is connected to RX1 (pin 19 on Arduino Mega) - connected to pin 3 by default (see DMX_RX_PIN)
-// TX(1) - middle pin is connected to pin  (pin 18 on Arduino Mega) - Arduino is the master
+// RX(0) is connected to pin 3 by default (see DMX_RX_PIN) - jumper connected to RX-io
+// TX(1) middle pin is connected to DMX_TX_PIN with a jumper (Arduino is the master)
 // DE(2) is connected to 5V - jumper connected to DE
 // EN jumper is connceted to EN (default is ~EN)
-const int DMX_TX_PIN = 3;                               // default pin is 3, used 7 for Nano
+const int DMX_TX_PIN = 10;                              // default pin is 3, used 10 - PWM pin required
+const int DMX_MODE_SELECT_PIN = 2;                      // default pin is 2
 
-// const int DMX_MASTER_CHANNELS = 512;                    // default is 512
+const int DMX_MASTER_CHANNELS = 20;                    // default is 512
 const int SMOKE_MACHINE_CHANNEL = 22;
 
 // Motor constants
@@ -77,16 +75,13 @@ typedef StaticJsonDocument<256> Packet;
 typedef struct {
 	short motor_on;
 	short smoke_on;
-  short beam_reset;
+	short beam_reset;
 	short beam_brightness;
 	short beam_focus;
 	short beam_x;
 	short beam_y;
 	short beam_speed;  
 } cmd_t;
-
-DMX_Master dmx_master(DMX_MASTER_CHANNELS, RXEN_PIN);
-
 
 short getJsonProperty(Packet pkt, char* propertyName) {
 	return pkt.containsKey(propertyName) ? pkt[propertyName].as<short>() : NO_OP;
@@ -111,7 +106,7 @@ cmd_t parseCommand(Packet pkt) {
 			command.motor_on,
 			command.smoke_on,
 			command.beam_reset,
-      command.beam_focus,
+			command.beam_focus,
 			command.beam_brightness,
 			command.beam_x,
 			command.beam_y,
@@ -177,10 +172,6 @@ short normalizeValue(short value, short maxValue) {
 	return normalized;
 }
 
-void writeDMX(int chan, int value) {
-  dmx_master.setChannelValue(chan, value);
-}
-
 void executeCommand(cmd_t command) {
 	if (command.motor_on == TRUE) {
 		startMotor();
@@ -189,27 +180,27 @@ void executeCommand(cmd_t command) {
 		stopMotor();
 	}
 	if (command.smoke_on == TRUE) {
-		writeDMX(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_ON);
+		DmxSimple.write(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_ON);
 	}
 	if (command.smoke_on == FALSE) {
-		writeDMX(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_OFF);
+		DmxSimple.write(SMOKE_MACHINE_CHANNEL, SMOKE_MACHINE_OFF);
 	}
   if (command.beam_reset == TRUE) {
-		writeDMX(LAMP_CTRL_RESET_CHANNEL, LAMP_RESET);
+		DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_RESET);
   }
   if (command.beam_focus != NO_OP) {
-		writeDMX(FOCUS_CHANNEL, command.beam_focus);
+		DmxSimple.write(FOCUS_CHANNEL, command.beam_focus);
   }
 	if (command.beam_brightness > 0) {
-		writeDMX(LAMP_CTRL_RESET_CHANNEL, LAMP_ON);
-		writeDMX(DIMMER_CHANNEL, command.beam_brightness);
+		DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_ON);
+		DmxSimple.write(DIMMER_CHANNEL, command.beam_brightness);
 	}
 	if (command.beam_brightness == 0) {
-		writeDMX(LAMP_CTRL_RESET_CHANNEL, LAMP_OFF);
-		writeDMX(DIMMER_CHANNEL, 0);
+		DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, LAMP_OFF);
+		DmxSimple.write(DIMMER_CHANNEL, 0);
 	}
 	if (command.beam_speed != NO_OP) {
-		writeDMX(PAN_TILT_SPEED_CHANNEL, command.beam_speed);
+		DmxSimple.write(PAN_TILT_SPEED_CHANNEL, command.beam_speed);
 	}
 	if (command.beam_x != NO_OP) {
 		short normalizedVal = normalizeValue(command.beam_x, PAN_MAX_ANGLE);
@@ -217,7 +208,7 @@ void executeCommand(cmd_t command) {
       Serial.print("X VALUE: ");
       Serial.println(normalizedVal);
     }
-		writeDMX(PAN_X_AXIS_CHANNEL, normalizedVal);
+		DmxSimple.write(PAN_X_AXIS_CHANNEL, normalizedVal);
 	}
 	if (command.beam_y != NO_OP) {
 		short normalizedVal = normalizeValue(command.beam_y, TILT_MAX_ANGLE);
@@ -225,7 +216,7 @@ void executeCommand(cmd_t command) {
       Serial.print("Y VALUE: ");
       Serial.println(normalizedVal);
     }
-		writeDMX(TILT_Y_AXIS_CHANNEL, normalizedVal);
+		DmxSimple.write(TILT_Y_AXIS_CHANNEL, normalizedVal);
 	}
 }
 
@@ -236,16 +227,19 @@ void initMotor() {
 }
 
 void initDmx() {
-    dmx_master.enable();  
+	pinMode(DMX_MODE_SELECT_PIN, OUTPUT);
+	digitalWrite(DMX_MODE_SELECT_PIN, HIGH);
+	DmxSimple.maxChannel(DMX_MASTER_CHANNELS);
+	DmxSimple.usePin(DMX_TX_PIN); 
 }
 
 void initBeam() {
-	writeDMX(COLOR_CHANNEL, COLOR_WHITE);
-	writeDMX(STROBE_CHANNEL, STROBE_OPEN);
-  writeDMX(DIMMER_CHANNEL, 0);
-	writeDMX(GOBO_CHANNEL, BEAM_GOBO_ENABLED ? GOBO_DISABLED : GOBO_BOBBING_MOTION);
-	writeDMX(FOCUS_CHANNEL, FOCUS_MAX);
-	writeDMX(FROST_CHANNEL, BEAM_FROST_ENABLED ? FROST_DISABLED : FROST_BLUR);
+	DmxSimple.write(COLOR_CHANNEL, COLOR_WHITE);
+	DmxSimple.write(STROBE_CHANNEL, STROBE_OPEN);
+	DmxSimple.write(DIMMER_CHANNEL, 0);
+	DmxSimple.write(GOBO_CHANNEL, BEAM_GOBO_ENABLED ? GOBO_DISABLED : GOBO_BOBBING_MOTION);
+	DmxSimple.write(FOCUS_CHANNEL, FOCUS_MAX);
+	DmxSimple.write(FROST_CHANNEL, BEAM_FROST_ENABLED ? FROST_DISABLED : FROST_BLUR);
 }
 
 void setup() {
@@ -261,8 +255,8 @@ void setup() {
 void test() {
 	const int DMX_CMD_DELAY_MILLIS = 100;
 	for (int value = 0; value <= 255; value++) {
-		writeDMX(PAN_X_AXIS_CHANNEL, value);
-		writeDMX(TILT_Y_AXIS_CHANNEL, value);
+		DmxSimple.write(PAN_X_AXIS_CHANNEL, value);
+		DmxSimple.write(TILT_Y_AXIS_CHANNEL, value);
 		delay(DMX_CMD_DELAY_MILLIS); 
 	}
 }
@@ -282,7 +276,7 @@ void dmxTest() {
 		delay(1000);
 		Serial.println(val);
 		for (int chan = 1; chan <= DMX_MASTER_CHANNELS; chan++) {
-			writeDMX(chan, val);  
+			DmxSimple.write(chan, val);  
 		}
 	}
 }
