@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include "avr/wdt.h"
 #include <DmxSimple.h>
-
+#include "ArduinoJson.hpp"
 
 /*
  * Arduino UNO + KeyeStudio DMX Shield
@@ -15,8 +15,49 @@
 
  * */
 
-#define DMX_MASTER_CHANNELS      16
+/*
+  Beam Channels:
+  - 1: Color
+  - 2: Strobe
+  - 3: Dimmer
+  - 4: Gobo
+  - 5: Prism 1 Insertion
+  - 6: Prism 2 Insertion
+  - 7: Prism 3 Insertion
+  - 8: Prism 4 Insertion
+  - 9: Focus
+  - 10: Pan (X axis)
+  - 11: Pan Fine
+  - 12: Tilt (Y axis)
+  - 13: Tilt Fine
+  - 14: Pan/Tilt Speed
+  - 15: Frost & Rainbow Lens
+  - 16: Lamp Control & Reset
+  # In 16 Channel Mode - The following channels are not used
+  - 17: Empty
+  - 18: Color Speed
+  - 19: Dimmer-Prism-Frost Speed
+  - 20: Gobo Speed
+
+ * */
+
+#ifdef BEAM_MODE_16_CHANNELS
+#undef BEAM_MODE_20_CHANNELS
+#endif // BEAM_MODE_16_CHANNELS
+
+#ifdef BEAM_MODE_20_CHANNELS
+#undef BEAM_MODE_16_CHANNELS
+#endif // BEAM_MODE_20_CHANNELS
+
+#ifdef BEAM_MODE_16_CHANNELS
+#define BEAM_MAX_CHANNELS        16
+#else // BEAM_MODE_16_CHANNELS
+#define BEAM_MODE_20_CHANNELS
+#define BEAM_MAX_CHANNELS        20
+#endif // BEAM_MODE_16_CHANNELS
+
 #define RXEN_PIN                 2
+#define DMX_TX_PIN               10
 
 #define LED_DELAY                100
 #define DMX_SIGNAL_DELAY         3
@@ -47,92 +88,334 @@
 #define GOBO_BOBBING_MOTION     80
 #define GOBO_SUPER_FOCUSED      60
 #define FOCUS_MAX               255
+#define FOCUS_MIN               0
 #define PAN_MIN_ANGLE           0
 #define PAN_MAX_ANGLE           540
 #define TILT_MIN_ANGLE          0
+#define TILT_ANGLE_OFFSET       28
 #define TILT_MAX_ANGLE          270
+#define PAN_TILT_SPEED_DEFAULT  0
 #define FROST_DISABLED          0
 #define FROST_BLUR              130
 #define LAMP_OFF                100
 #define LAMP_ON                 200
 #define LAMP_RESET              255
 
-const boolean BEAM_FROST_ENABLED = true;                // enables an aesthetic fade effect in the edges of the beam
-const boolean BEAM_GOBO_ENABLED = true;                 // enables a light bobbing motion of the beam which can be pretty
+// Smoke machine constants
+#define SMOKE_MACHINE_OFF         0
+#define SMOKE_MACHINE_ON          255
+#define DMX_SMOKE_MACHINE_CHANNEL 22
 
-const bool WRITE_ALL_DMX_STATE = false;               // writes all channels in one
+const boolean BEAM_FROST_ENABLED = true;                // enables an aesthetic fade effect in the edges of the dmx_buffer
+const boolean BEAM_GOBO_ENABLED = true;                 // enables a light bobbing motion of the dmx_buffer which can be pretty
 
+namespace sauronism {
+  namespace json_protocol {
+    static const char *valid_commands[] = {
+        "pan", "x",
+        "tilt", "y",
+        "brightness", "b",
+        "velocity", "v",
+        "motor", "m",
+        "smoke", "s",
+        "debug"
+    };
+  }
+}
 
 typedef struct BeamState {
-  byte color = 0;
-  byte strobe = 0;
-  byte dimmer = 0;
-  byte gobo = 0;
-  byte focus = 0;
-  byte pan = 0;
-  byte tilt = 0;
-  byte pan_tilt_speed = 0;
-  byte frost = 0;
-  byte lamp_ctrl_reset = 0;
+  byte color;
+  byte strobe;
+  byte dimmer;
+  byte gobo;
+  byte prism_1;
+  byte prism_2;
+  byte prism_3;
+  byte prism_4;
+  byte focus;
+  byte pan;
+  byte pan_fine;
+  byte tilt;
+  byte tilt_fine;
+  byte pan_tilt_time;
+  byte frost;
+  byte lamp_ctrl_reset;
+#ifdef BEAM_MODE_20_CHANNELS
+  byte _empty;
+  byte color_time;
+  byte dimmer_prism_frost_time;
+  byte gobo_time;
+#endif  // BEAM_MODE_20_CHANNELS
 } BeamState;
 
+typedef struct SmokeMachine {
+  byte on;
+} SmokeMachine;
 
-void setup() {
-  /* The most common pin for DMX output is pin 3, which DmxSimple
-  ** uses by default. If you need to change that, do it here. */
-  Serial.begin(9600);
-  DmxSimple.usePin(10);
-  pinMode(RXEN_PIN, OUTPUT);
-  digitalWrite(RXEN_PIN, HIGH);
 
-  /* DMX devices typically need to receive a complete set of channels
-  ** even if you only need to adjust the first channel. You can
-  ** easily change the number of channels sent here. If you don't
-  ** do this, DmxSimple will set the maximum channel number to the
-  ** highest channel you DmxSimple.write() to. */
-  DmxSimple.maxChannel(20);
-  Serial.print("DMX initialized\n");
+typedef union BeamStateBuffer {
+  // Addressable properties by name
+  struct {
+    BeamState beam;
+    byte _padding[DMX_SMOKE_MACHINE_CHANNEL - BEAM_MAX_CHANNELS - 1];
+    SmokeMachine smoke;
+
+  };
+  // Addressable properties by index, useful for dumping the beam to the DMX bus
+  byte buffer[DMX_SMOKE_MACHINE_CHANNEL];
+
+} DmxBuffer;
+
+static_assert(sizeof(BeamState) == BEAM_MAX_CHANNELS, "BeamState size mismatch");
+static_assert(sizeof(SmokeMachine) == 1, "SmokeMachine size mismatch");
+static_assert(sizeof(DmxBuffer) == DMX_SMOKE_MACHINE_CHANNEL, "DmxBuffer size mismatch");
+
+typedef struct CommandState {
+  int16_t pan = 0;
+  int16_t tilt = 0;
+  int16_t brightness = 0;
+  int16_t velocity = 0;
+  int16_t motor = 0;
+  int16_t smoke = 0;
+
+  void update_from_json(const ArduinoJson::JsonDocument &command) {
+    if (command.containsKey("pan")) {
+      pan = command["pan"];
+    }
+    if (command.containsKey("x")) {
+      pan = command["x"];
+    }
+    if (command.containsKey("tilt")) {
+      tilt = command["tilt"];
+    }
+    if (command.containsKey("y")) {
+      tilt = command["y"];
+    }
+    if (command.containsKey("brightness")) {
+      brightness = command["brightness"];
+    }
+    if (command.containsKey("b")) {
+      brightness = command["b"];
+    }
+    if (command.containsKey("velocity")) {
+      velocity = command["velocity"];
+    }
+    if (command.containsKey("v")) {
+      velocity = command["v"];
+    }
+    if (command.containsKey("motor")) {
+      motor = command["motor"];
+    }
+    if (command.containsKey("m")) {
+      motor = command["m"];
+    }
+    if (command.containsKey("s")) {
+      smoke = command["s"];
+    }
+    if (command.containsKey("smoke")) {
+      smoke = command["smoke"];
+    }
+  }
+
+} CommandState;
+
+
+static CommandState command_state;
+static DmxBuffer dmx_buffer;
+static SmokeMachine smoke_machine;
+
+void init_dmx_buffer() {
+  for (auto &_byte: dmx_buffer.buffer) {
+    _byte = 0;
+  }
+
+  dmx_buffer.beam.color = COLOR_WHITE;
+  dmx_buffer.beam.strobe = STROBE_OPEN;
+  dmx_buffer.beam.dimmer = DIMMER_MIN_BRIGHTNESS + 20;
+  dmx_buffer.beam.gobo = GOBO_DISABLED;
+  dmx_buffer.beam.prism_1 = 0;
+  dmx_buffer.beam.prism_2 = 0;
+  dmx_buffer.beam.prism_3 = 0;
+  dmx_buffer.beam.prism_4 = 0;
+  dmx_buffer.beam.focus = FOCUS_MIN;
+  dmx_buffer.beam.pan = 0;
+  dmx_buffer.beam.pan_fine = 0;
+  dmx_buffer.beam.tilt = 0;
+  dmx_buffer.beam.tilt_fine = 0;
+  dmx_buffer.beam.pan_tilt_time = PAN_TILT_SPEED_DEFAULT;
+  dmx_buffer.beam.frost = FROST_DISABLED;
+  dmx_buffer.beam.lamp_ctrl_reset = LAMP_ON;
+#ifdef BEAM_MODE_20_CHANNELS
+  dmx_buffer.beam._empty = 0;
+  dmx_buffer.beam.color_time = 0;
+  dmx_buffer.beam.dimmer_prism_frost_time = 0;
+  dmx_buffer.beam.gobo_time = 0;
+#endif  // BEAM_MODE_20_CHANNELS
+
+  smoke_machine.on = SMOKE_MACHINE_OFF;
+}
+
+void init_command_state() {
+  command_state.pan = 0;
+  command_state.tilt = 0;
+  command_state.brightness = 0;
+  command_state.velocity = 0;
+  command_state.motor = 0;
+  command_state.smoke = 0;
+}
+
+namespace sauronism {
+  namespace dmx_protocol {
+    void dmx_update() {
+      for (int i = 0; i < BEAM_MAX_CHANNELS; i++) {
+        DmxSimple.write(i + 1, dmx_buffer.buffer[i]);
+      }
+    }
+
+    void dmx_init() {
+      DmxSimple.usePin(DMX_TX_PIN);
+      pinMode(RXEN_PIN, OUTPUT);
+      digitalWrite(RXEN_PIN, HIGH);
+      DmxSimple.maxChannel(max(BEAM_MAX_CHANNELS, DMX_SMOKE_MACHINE_CHANNEL));
+    }
+  }
 }
 
 
-void writeDmxValue(const BeamState &state) {
-  DmxSimple.write(COLOR_CHANNEL, state.color);
-  DmxSimple.write(STROBE_CHANNEL, state.strobe);
-  DmxSimple.write(DIMMER_CHANNEL, state.dimmer);
-  DmxSimple.write(GOBO_CHANNEL, state.gobo);
-  DmxSimple.write(FOCUS_CHANNEL, state.focus);
-  DmxSimple.write(PAN_X_AXIS_CHANNEL, state.pan);
-  DmxSimple.write(TILT_Y_AXIS_CHANNEL, state.tilt);
-  DmxSimple.write(PAN_TILT_SPEED_CHANNEL, state.pan_tilt_speed);
-  DmxSimple.write(FROST_CHANNEL, state.frost);
-  DmxSimple.write(LAMP_CTRL_RESET_CHANNEL, state.lamp_ctrl_reset);
+void dump_dmx_state() {
+  Serial.print(F(R"({"module": "beam", "color": )"));
+  Serial.print(dmx_buffer.beam.color);
+  Serial.print(F(R"(, "strobe": )"));
+  Serial.print(dmx_buffer.beam.strobe);
+  Serial.print(F(R"(, "dimmer": )"));
+  Serial.print(dmx_buffer.beam.dimmer);
+  Serial.print(F(R"(, "gobo": )"));
+  Serial.print(dmx_buffer.beam.gobo);
+  Serial.print(F(R"(, "focus": )"));
+  Serial.print(dmx_buffer.beam.focus);
+  Serial.print(F(R"(, "pan": )"));
+  Serial.print(dmx_buffer.beam.pan);
+  Serial.print(F(R"(, "tilt": )"));
+  Serial.print(dmx_buffer.beam.tilt);
+  Serial.print(F(R"(, "pan_tilt_time": )"));
+  Serial.print(dmx_buffer.beam.pan_tilt_time);
+  Serial.print(F(R"(, "frost": )"));
+  Serial.print(dmx_buffer.beam.frost);
+  Serial.print(F(R"(, "lamp_ctrl_reset": )"));
+  Serial.print(dmx_buffer.beam.lamp_ctrl_reset);
+#ifdef BEAM_MODE_20_CHANNELS
+//  Serial.print(F(R"(, "_empty": )"));
+//  Serial.print(dmx_buffer.beam._empty);
+  Serial.print(F(R"(, "color_time": )"));
+  Serial.print(dmx_buffer.beam.color_time);
+  Serial.print(F(R"(, "dimmer_prism_frost_time": )"));
+  Serial.print(dmx_buffer.beam.dimmer_prism_frost_time);
+  Serial.print(F(R"(, "gobo_time": )"));
+  Serial.print(dmx_buffer.beam.gobo_time);
+#endif  // BEAM_MODE_20_CHANNELS
+  Serial.print(F(R"(, "smoke": )"));
+  Serial.print(smoke_machine.on);
+  Serial.print(F("}\n"));
+}
+
+/*
+ * Translate the command beam to output units
+ * */
+void apply_command() {
+  dmx_buffer.beam.pan = map(command_state.pan, PAN_MIN_ANGLE, PAN_MAX_ANGLE, 0, 255);
+  dmx_buffer.beam.tilt = constrain(
+      map(command_state.tilt + TILT_ANGLE_OFFSET, TILT_MIN_ANGLE, TILT_MAX_ANGLE - TILT_ANGLE_OFFSET, 0, 255), 0,
+      255);
+  dmx_buffer.beam.dimmer = command_state.brightness;
+  dmx_buffer.beam.pan_tilt_time = map(command_state.velocity, 0, 100, 0, 255);
+  dmx_buffer.smoke.on = command_state.smoke ? SMOKE_MACHINE_ON : SMOKE_MACHINE_OFF;
+}
+
+
+void command_parse_log(const ArduinoJson::DeserializationError &error) {
+  Serial.print(F(R"({"module": "command_parse", "ok": )"));
+  Serial.print(!error ? F("true") : F("false"));
+  Serial.print(F(R"(, "details": ")"));
+  Serial.print(error.f_str());
+  Serial.print(F(R"(", "command_state": {)"));
+  Serial.print(F(R"("pan": )"));
+  Serial.print(command_state.pan);
+  Serial.print(F(R"(, "tilt": )"));
+  Serial.print(command_state.tilt);
+  Serial.print(F(R"(, "brightness": )"));
+  Serial.print(command_state.brightness);
+  Serial.print(F(R"(, "velocity": )"));
+  Serial.print(command_state.velocity);
+  Serial.print(F(R"(, "motor": )"));
+  Serial.print(command_state.motor);
+  Serial.print(F(R"(, "smoke": )"));
+  Serial.print(command_state.smoke);
+  Serial.print("}}\n");
+}
+
+
+auto command_parse() -> ArduinoJson::DeserializationError {
+  static const ArduinoJson::JsonObjectConst filter = ([&]() {
+    static ArduinoJson::JsonDocument _command_filter;
+    for (const auto field: sauronism::json_protocol::valid_commands) {
+      _command_filter[field] = true;
+    }
+    return _command_filter.as<ArduinoJson::JsonObject>();
+  })();
+
+  static ArduinoJson::JsonDocument command_json_buffer;
+  const auto error = ArduinoJson::deserializeJson(
+      command_json_buffer,
+      Serial,
+      ArduinoJson::DeserializationOption::Filter(filter),
+      ArduinoJson::DeserializationOption::NestingLimit(1)
+  );
+  Serial.flush();
+
+
+  switch (error.code()) {
+    case ArduinoJson::DeserializationError::Ok:
+      command_state.update_from_json(command_json_buffer);
+      if (command_json_buffer.containsKey("debug")) {
+        dump_dmx_state();
+      }
+      apply_command();
+      break;
+    default:
+      break;
+  }
+  return
+      error;
+}
+
+void setup() {
+  delay(500);
+  wdt_enable(WDTO_2S);
+  Serial.begin(256000);
+  Serial.println("Starting Beam Controller");
+  init_command_state();
+  init_dmx_buffer();
+  Serial.println("Initializing DMX Protocol");
+  sauronism::dmx_protocol::dmx_init();
+  apply_command();
+  sauronism::dmx_protocol::dmx_update();
+  Serial.println("Beam Controller Ready");
+}
+
+
+/*
+ * This function is called whenever the serial port receives data
+ * */
+void serialEvent() {
+  if (Serial.available()) {
+    const auto error = command_parse();
+    command_parse_log(error);
+  }
 }
 
 
 void loop() {
   wdt_reset();
-
-  static BeamState state;
-  for (auto i = 0; i < 256; i++) {
-    state.color = 0;
-    state.strobe = STROBE_OPEN;
-    state.dimmer = DIMMER_MIN_BRIGHTNESS;
-    state.gobo = GOBO_DISABLED;
-    state.focus = 0;
-    state.pan = 30;
-    state.tilt = 0;
-    state.pan_tilt_speed = 10;
-    state.frost = 10;
-    state.lamp_ctrl_reset = LAMP_ON;
-  }
-  writeDmxValue(state);
-  delay(500);
-  // raster movement in a defined region
-//  for (int j = 0; j < 100; j++) {
-//    for (int i = 0; i < DMX_SIGNAL_REPEAT; i ++) {
-//      writeDmx(PAN_X_AXIS_CHANNEL, j <= 50 ? j : 100 - j);
-//      delay(DMX_SIGNAL_DELAY);
-//    }
-//  }
-//  postProcessDmxState();
+  sauronism::dmx_protocol::dmx_update();
+  delay(10);
 }
