@@ -3,6 +3,7 @@
 #include "avr/wdt.h"
 #include <DmxSimple.h>
 #include "ArduinoJson.hpp"
+#include "FastLED.h"
 
 /*
  * Arduino UNO + KeyeStudio DMX Shield
@@ -109,6 +110,22 @@
 const boolean BEAM_FROST_ENABLED = true;                // enables an aesthetic fade effect in the edges of the dmx_buffer
 const boolean BEAM_GOBO_ENABLED = true;                 // enables a light bobbing motion of the dmx_buffer which can be pretty
 
+// Motor constants
+// R_EN and L_EN connected to VCC (IBT-2 pins 3 & 4)
+// L_IS and R_IS not connected    (IBT-2 pins 5 & 6)
+const int MOTOR_RPWM_OUTPUT = 5;                        // Arduino PWM output pin D9; connect to IBT-2 pin 1 (RPWM)
+const int MOTOR_LPWM_OUTPUT = 6;                        // Arduino PWM output pin D10; connect to IBT-2 pin 2 (LPWM)
+const int MOTOR_MAX_PWM_VALUE = 255;                    // Adjust this delay to control the maximum speed of the motor
+const int MOTOR_ACCELERATION_DELAY_MILLIS = 30;         // Adjust this delay to control the speed of acceleration/deceleration
+
+// motor state
+typedef struct MotorState {
+  short current_pwm = 0;    // tracking the current PWM value to ensure smooth transitions in case of duplicate commands
+  short target_pwm = 0;     // allowing small incremets with short delays in a non blocking manner until the desired state is reached
+} MotorState;
+
+static MotorState motor_state;
+
 namespace sauronism {
   namespace json_protocol {
     static const char *valid_commands[] = {
@@ -117,9 +134,25 @@ namespace sauronism {
         "brightness", "b",
         "velocity", "v",
         "motor", "m",
-        "smoke", "s",
+        "smoke_machine", "s",
         "debug"
     };
+  }
+
+  namespace motor {
+    static void motor_init() {
+      pinMode(MOTOR_RPWM_OUTPUT, OUTPUT);
+      pinMode(MOTOR_LPWM_OUTPUT, OUTPUT);
+      analogWrite(MOTOR_LPWM_OUTPUT, 0);
+      motor_state.current_pwm = 0;
+      motor_state.target_pwm = 0;
+    }
+
+    static void motor_update() {
+      short delta = (motor_state.current_pwm > motor_state.target_pwm) ? -1 : 1;
+      motor_state.current_pwm += delta;
+      analogWrite(MOTOR_RPWM_OUTPUT, motor_state.current_pwm);
+    }
   }
 }
 
@@ -149,7 +182,7 @@ typedef struct BeamState {
 } BeamState;
 
 typedef struct SmokeMachine {
-  byte on;
+  byte value;
 } SmokeMachine;
 
 
@@ -158,7 +191,7 @@ typedef union BeamStateBuffer {
   struct {
     BeamState beam;
     byte _padding[DMX_SMOKE_MACHINE_CHANNEL - BEAM_MAX_CHANNELS - 1];
-    SmokeMachine smoke;
+    SmokeMachine smoke_machine;
 
   };
   // Addressable properties by index, useful for dumping the beam to the DMX bus
@@ -222,7 +255,6 @@ typedef struct CommandState {
 
 static CommandState command_state;
 static DmxBuffer dmx_buffer;
-static SmokeMachine smoke_machine;
 
 void init_dmx_buffer() {
   for (auto &_byte: dmx_buffer.buffer) {
@@ -252,7 +284,7 @@ void init_dmx_buffer() {
   dmx_buffer.beam.gobo_time = 0;
 #endif  // BEAM_MODE_20_CHANNELS
 
-  smoke_machine.on = SMOKE_MACHINE_OFF;
+  dmx_buffer.smoke_machine.value = SMOKE_MACHINE_OFF;
 }
 
 void init_command_state() {
@@ -282,8 +314,9 @@ namespace sauronism {
 }
 
 
-void dump_dmx_state() {
-  Serial.print(F(R"({"module": "beam", "color": )"));
+void dump_debug_state() {
+  // Beam
+  Serial.print(F(R"({"module": "dump_debug_state", "color": )"));
   Serial.print(dmx_buffer.beam.color);
   Serial.print(F(R"(, "strobe": )"));
   Serial.print(dmx_buffer.beam.strobe);
@@ -313,8 +346,17 @@ void dump_dmx_state() {
   Serial.print(F(R"(, "gobo_time": )"));
   Serial.print(dmx_buffer.beam.gobo_time);
 #endif  // BEAM_MODE_20_CHANNELS
-  Serial.print(F(R"(, "smoke": )"));
-  Serial.print(smoke_machine.on);
+
+  // Smoke machine
+  Serial.print(F(R"(, "smoke_machine": )"));
+  Serial.print(dmx_buffer.smoke_machine.value);
+
+  // Motor State
+  Serial.print(F(R"(, "motor_current_pwm": )"));
+  Serial.print(motor_state.current_pwm);
+  Serial.print(F(R"(, "motor_target_pwm": )"));
+  Serial.print(motor_state.target_pwm);
+
   Serial.print(F("}\n"));
 }
 
@@ -328,7 +370,7 @@ void apply_command() {
       255);
   dmx_buffer.beam.dimmer = command_state.brightness;
   dmx_buffer.beam.pan_tilt_time = map(command_state.velocity, 0, 100, 0, 255);
-  dmx_buffer.smoke.on = command_state.smoke ? SMOKE_MACHINE_ON : SMOKE_MACHINE_OFF;
+  dmx_buffer.smoke_machine.value = command_state.smoke ? SMOKE_MACHINE_ON : SMOKE_MACHINE_OFF;
 }
 
 
@@ -370,14 +412,12 @@ auto command_parse() -> ArduinoJson::DeserializationError {
       ArduinoJson::DeserializationOption::Filter(filter),
       ArduinoJson::DeserializationOption::NestingLimit(1)
   );
-  Serial.flush();
-
 
   switch (error.code()) {
     case ArduinoJson::DeserializationError::Ok:
       command_state.update_from_json(command_json_buffer);
       if (command_json_buffer.containsKey("debug")) {
-        dump_dmx_state();
+        dump_debug_state();
       }
       apply_command();
       break;
@@ -395,6 +435,8 @@ void setup() {
   Serial.println("Starting Beam Controller");
   init_command_state();
   init_dmx_buffer();
+  Serial.println("Initializing Motor Controller");
+  sauronism::motor::motor_init();
   Serial.println("Initializing DMX Protocol");
   sauronism::dmx_protocol::dmx_init();
   apply_command();
@@ -416,6 +458,13 @@ void serialEvent() {
 
 void loop() {
   wdt_reset();
-  sauronism::dmx_protocol::dmx_update();
-  delay(10);
+  EVERY_N_MILLISECONDS(10) {
+    sauronism::dmx_protocol::dmx_update();
+  }
+  EVERY_N_MILLISECONDS(30) {
+    sauronism::motor::motor_update();
+  }
+  EVERY_N_SECONDS(20) {
+    dump_debug_state();
+  }
 }
