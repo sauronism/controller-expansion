@@ -102,10 +102,6 @@
 #define LAMP_ON                 200
 #define LAMP_RESET              255
 
-// Smoke machine constants
-#define SMOKE_MACHINE_OFF         0
-#define SMOKE_MACHINE_ON          255
-#define DMX_SMOKE_MACHINE_CHANNEL 22
 
 const boolean BEAM_FROST_ENABLED = true;                // enables an aesthetic fade effect in the edges of the dmx_buffer
 const boolean BEAM_GOBO_ENABLED = true;                 // enables a light bobbing motion of the dmx_buffer which can be pretty
@@ -134,7 +130,6 @@ namespace sauronism {
         "brightness", "b",
         "velocity", "v",
         "motor", "m",
-        "smoke_machine", "s",
         "debug"
     };
   }
@@ -181,27 +176,17 @@ typedef struct BeamState {
 #endif  // BEAM_MODE_20_CHANNELS
 } BeamState;
 
-typedef struct SmokeMachine {
-  byte value;
-} SmokeMachine;
 
-
-typedef union BeamStateBuffer {
+typedef union DmxBuffer {
   // Addressable properties by name
   struct {
     BeamState beam;
-    byte _padding[DMX_SMOKE_MACHINE_CHANNEL - BEAM_MAX_CHANNELS - 1];
-    SmokeMachine smoke_machine;
-
   };
-  // Addressable properties by index, useful for dumping the beam to the DMX bus
-  byte buffer[DMX_SMOKE_MACHINE_CHANNEL];
-
+  byte buffer[BEAM_MAX_CHANNELS];
 } DmxBuffer;
 
 static_assert(sizeof(BeamState) == BEAM_MAX_CHANNELS, "BeamState size mismatch");
-static_assert(sizeof(SmokeMachine) == 1, "SmokeMachine size mismatch");
-static_assert(sizeof(DmxBuffer) == DMX_SMOKE_MACHINE_CHANNEL, "DmxBuffer size mismatch");
+static_assert(sizeof(DmxBuffer) == BEAM_MAX_CHANNELS, "DmxBuffer size mismatch");
 
 typedef struct CommandState {
   int16_t pan = 0;
@@ -284,7 +269,6 @@ void init_dmx_buffer() {
   dmx_buffer.beam.gobo_time = 0;
 #endif  // BEAM_MODE_20_CHANNELS
 
-  dmx_buffer.smoke_machine.value = SMOKE_MACHINE_OFF;
 }
 
 void init_command_state() {
@@ -308,7 +292,7 @@ namespace sauronism {
       DmxSimple.usePin(DMX_TX_PIN);
       pinMode(RXEN_PIN, OUTPUT);
       digitalWrite(RXEN_PIN, HIGH);
-      DmxSimple.maxChannel(max(BEAM_MAX_CHANNELS, DMX_SMOKE_MACHINE_CHANNEL));
+      DmxSimple.maxChannel(BEAM_MAX_CHANNELS);
     }
   }
 }
@@ -347,9 +331,6 @@ void dump_debug_state() {
   Serial.print(dmx_buffer.beam.gobo_time);
 #endif  // BEAM_MODE_20_CHANNELS
 
-  // Smoke machine
-  Serial.print(F(R"(, "smoke_machine": )"));
-  Serial.print(dmx_buffer.smoke_machine.value);
 
   // Motor State
   Serial.print(F(R"(, "motor_current_pwm": )"));
@@ -370,7 +351,6 @@ void apply_command() {
       255);
   dmx_buffer.beam.dimmer = command_state.brightness;
   dmx_buffer.beam.pan_tilt_time = map(command_state.velocity, 0, 100, 0, 255);
-  dmx_buffer.smoke_machine.value = command_state.smoke ? SMOKE_MACHINE_ON : SMOKE_MACHINE_OFF;
 }
 
 
@@ -464,6 +444,10 @@ void loop() {
   EVERY_N_MILLISECONDS(30) {
     sauronism::motor::motor_update();
   }
+  EVERY_N_MILLISECONDS(100) {
+    sauronism::control_panel::update();
+  }
+
   EVERY_N_SECONDS(20) {
     dump_debug_state();
   }
