@@ -80,6 +80,19 @@
 #define FROST_CHANNEL           15
 #define LAMP_CTRL_RESET_CHANNEL 16
 
+
+// Manual controls constants
+// Joystick pins
+#define CONTROL_JOYSTICK_LEFT_PIN 4
+#define CONTROL_JOYSTICK_RIGHT_PIN 7
+#define CONTROL_JOYSTICK_UP_PIN 8
+#define CONTROL_JOYSTICK_DOWN_PIN 12
+// Selector pins
+#define CONTROL_BEAM_SELECTOR_PIN 3
+#define CONTROL_MOTOR_SELECTOR_PIN 11
+#define CONTROL_BRIGHTNESS_SELECTOR_PIN 13
+
+
 // Beam constants
 #define COLOR_WHITE             0
 #define STROBE_OPEN             255
@@ -120,36 +133,16 @@ typedef struct MotorState {
   short target_pwm = 0;     // allowing small incremets with short delays in a non blocking manner until the desired state is reached
 } MotorState;
 
-static MotorState motor_state;
+typedef struct CommandState {
+  int16_t pan = 0;
+  int16_t tilt = 0;
+  int16_t brightness = 0;
+  int16_t velocity = 0;
+  int16_t motor = 0;
 
-namespace sauronism {
-  namespace json_protocol {
-    static const char *valid_commands[] = {
-        "pan", "x",
-        "tilt", "y",
-        "brightness", "b",
-        "velocity", "v",
-        "motor", "m",
-        "debug"
-    };
-  }
+  void update_from_json(const ArduinoJson::JsonDocument &command);
 
-  namespace motor {
-    static void motor_init() {
-      pinMode(MOTOR_RPWM_OUTPUT, OUTPUT);
-      pinMode(MOTOR_LPWM_OUTPUT, OUTPUT);
-      analogWrite(MOTOR_LPWM_OUTPUT, 0);
-      motor_state.current_pwm = 0;
-      motor_state.target_pwm = 0;
-    }
-
-    static void motor_update() {
-      short delta = (motor_state.current_pwm > motor_state.target_pwm) ? -1 : 1;
-      motor_state.current_pwm += delta;
-      analogWrite(MOTOR_RPWM_OUTPUT, motor_state.current_pwm);
-    }
-  }
-}
+} CommandState;
 
 typedef struct BeamState {
   byte color;
@@ -184,62 +177,188 @@ typedef union DmxBuffer {
   };
   byte buffer[BEAM_MAX_CHANNELS];
 } DmxBuffer;
-
 static_assert(sizeof(BeamState) == BEAM_MAX_CHANNELS, "BeamState size mismatch");
 static_assert(sizeof(DmxBuffer) == BEAM_MAX_CHANNELS, "DmxBuffer size mismatch");
 
-typedef struct CommandState {
-  int16_t pan = 0;
-  int16_t tilt = 0;
-  int16_t brightness = 0;
-  int16_t velocity = 0;
-  int16_t motor = 0;
-  int16_t smoke = 0;
 
-  void update_from_json(const ArduinoJson::JsonDocument &command) {
-    if (command.containsKey("pan")) {
-      pan = command["pan"];
+static MotorState motor_state;
+static CommandState command_state;
+static DmxBuffer dmx_buffer;
+
+/*
+ * Translate the command beam to output units
+ * */
+void apply_command();
+
+void dump_command_state();
+
+
+namespace sauronism {
+  namespace json_protocol {
+    static const char *valid_commands[] = {
+        "pan", "x",
+        "tilt", "y",
+        "brightness", "b",
+        "velocity", "v",
+        "motor", "m",
+        "debug"
+    };
+
+  }
+
+  namespace dmx_protocol {
+    void dmx_update() {
+      for (int i = 0; i < BEAM_MAX_CHANNELS; i++) {
+        DmxSimple.write(i + 1, dmx_buffer.buffer[i]);
+      }
     }
-    if (command.containsKey("x")) {
-      pan = command["x"];
-    }
-    if (command.containsKey("tilt")) {
-      tilt = command["tilt"];
-    }
-    if (command.containsKey("y")) {
-      tilt = command["y"];
-    }
-    if (command.containsKey("brightness")) {
-      brightness = command["brightness"];
-    }
-    if (command.containsKey("b")) {
-      brightness = command["b"];
-    }
-    if (command.containsKey("velocity")) {
-      velocity = command["velocity"];
-    }
-    if (command.containsKey("v")) {
-      velocity = command["v"];
-    }
-    if (command.containsKey("motor")) {
-      motor = command["motor"];
-    }
-    if (command.containsKey("m")) {
-      motor = command["m"];
-    }
-    if (command.containsKey("s")) {
-      smoke = command["s"];
-    }
-    if (command.containsKey("smoke")) {
-      smoke = command["smoke"];
+
+    void dmx_init() {
+      DmxSimple.usePin(DMX_TX_PIN);
+      pinMode(RXEN_PIN, OUTPUT);
+      digitalWrite(RXEN_PIN, HIGH);
+      DmxSimple.maxChannel(BEAM_MAX_CHANNELS);
     }
   }
 
-} CommandState;
+  namespace motor {
+    static void motor_init() {
+      pinMode(MOTOR_RPWM_OUTPUT, OUTPUT);
+      pinMode(MOTOR_LPWM_OUTPUT, OUTPUT);
+      analogWrite(MOTOR_LPWM_OUTPUT, 0);
+      motor_state.current_pwm = 0;
+      motor_state.target_pwm = 0;
+    }
+
+    static void motor_update() {
+      short delta = (motor_state.current_pwm > motor_state.target_pwm) ? -1 : 1;
+      motor_state.current_pwm += delta;
+      analogWrite(MOTOR_RPWM_OUTPUT, motor_state.current_pwm);
+    }
+  }
+
+  namespace control_panel {
+
+    static void control_panel_init() {
+      pinMode(CONTROL_JOYSTICK_LEFT_PIN, INPUT_PULLUP);
+      pinMode(CONTROL_JOYSTICK_RIGHT_PIN, INPUT_PULLUP);
+      pinMode(CONTROL_JOYSTICK_UP_PIN, INPUT_PULLUP);
+      pinMode(CONTROL_JOYSTICK_DOWN_PIN, INPUT_PULLUP);
+      pinMode(CONTROL_BEAM_SELECTOR_PIN, INPUT_PULLUP);
+      pinMode(CONTROL_MOTOR_SELECTOR_PIN, INPUT_PULLUP);
+      pinMode(CONTROL_BRIGHTNESS_SELECTOR_PIN, INPUT_PULLUP);
+    }
+
+    void control_panel_log(
+        bool select_beam,
+        bool select_motor,
+        bool select_brightness,
+        bool control_up,
+        bool control_down,
+        bool control_left,
+        bool control_right
+    );
 
 
-static CommandState command_state;
-static DmxBuffer dmx_buffer;
+    static void control_panel_update_beam(
+        const bool control_up,
+        const bool control_down,
+        const bool control_left,
+        const bool control_right
+    ) {
+      if (control_left) {
+        command_state.pan = constrain(command_state.pan - 1, 0, 180);
+      } else if (control_right) {
+        command_state.pan = constrain(command_state.pan + 1, 0, 180);
+      } else if (control_up) {
+        command_state.tilt = constrain(command_state.tilt + 1, -30, 30);
+      } else if (control_down) {
+        command_state.tilt = constrain(command_state.tilt - 1, -30, 30);
+      }
+    }
+
+    static void control_panel_update_motor(const bool control_up, const bool control_down) {
+      if (control_up) {
+        command_state.motor = constrain(command_state.motor + 1, 0, 255);
+      } else if (control_down) {
+        command_state.motor = constrain(command_state.motor - 1, 0, 255);
+      }
+    }
+
+    static void control_panel_update_brightness(const bool control_up, const bool control_down) {
+      if (control_up) {
+        command_state.brightness = constrain(command_state.brightness + 1, 0, 255);
+      } else if (control_down) {
+        command_state.brightness = constrain(command_state.brightness - 1, 0, 255);
+      }
+    }
+
+    static void control_panel_update() {
+      const auto select_beam = digitalRead(CONTROL_BEAM_SELECTOR_PIN) == LOW;
+      const auto select_motor = digitalRead(CONTROL_MOTOR_SELECTOR_PIN) == LOW;
+      const auto select_brightness = digitalRead(CONTROL_BRIGHTNESS_SELECTOR_PIN) == LOW;
+      const auto control_up = digitalRead(CONTROL_JOYSTICK_UP_PIN) == LOW;
+      const auto control_down = digitalRead(CONTROL_JOYSTICK_DOWN_PIN) == LOW;
+      const auto control_left = digitalRead(CONTROL_JOYSTICK_LEFT_PIN) == LOW;
+      const auto control_right = digitalRead(CONTROL_JOYSTICK_RIGHT_PIN) == LOW;
+      const auto is_any_command_active = select_beam || select_motor || select_brightness;
+
+      if (select_beam) {
+        control_panel_update_beam(control_up, control_down, control_left, control_right);
+      } else if (select_motor) {
+        control_panel_update_motor(control_up, control_down);
+      } else if (select_brightness) {
+        control_panel_update_brightness(control_up, control_down);
+      }
+      if (is_any_command_active) {
+        control_panel_log(
+            select_beam,
+            select_motor,
+            select_brightness,
+            control_up,
+            control_down,
+            control_left,
+            control_right
+        );
+        apply_command();
+      }
+    }
+  }
+}
+
+void CommandState::update_from_json(const ArduinoJson::JsonDocument &command) {
+  if (command.containsKey("pan")) {
+    pan = command["pan"];
+  }
+  if (command.containsKey("x")) {
+    pan = command["x"];
+  }
+  if (command.containsKey("tilt")) {
+    tilt = command["tilt"];
+  }
+  if (command.containsKey("y")) {
+    tilt = command["y"];
+  }
+  if (command.containsKey("brightness")) {
+    brightness = command["brightness"];
+  }
+  if (command.containsKey("b")) {
+    brightness = command["b"];
+  }
+  if (command.containsKey("velocity")) {
+    velocity = command["velocity"];
+  }
+  if (command.containsKey("v")) {
+    velocity = command["v"];
+  }
+  if (command.containsKey("motor")) {
+    motor = command["motor"];
+  }
+  if (command.containsKey("m")) {
+    motor = command["m"];
+  }
+}
+
 
 void init_dmx_buffer() {
   for (auto &_byte: dmx_buffer.buffer) {
@@ -277,24 +396,6 @@ void init_command_state() {
   command_state.brightness = 0;
   command_state.velocity = 0;
   command_state.motor = 0;
-  command_state.smoke = 0;
-}
-
-namespace sauronism {
-  namespace dmx_protocol {
-    void dmx_update() {
-      for (int i = 0; i < BEAM_MAX_CHANNELS; i++) {
-        DmxSimple.write(i + 1, dmx_buffer.buffer[i]);
-      }
-    }
-
-    void dmx_init() {
-      DmxSimple.usePin(DMX_TX_PIN);
-      pinMode(RXEN_PIN, OUTPUT);
-      digitalWrite(RXEN_PIN, HIGH);
-      DmxSimple.maxChannel(BEAM_MAX_CHANNELS);
-    }
-  }
 }
 
 
@@ -341,9 +442,6 @@ void dump_debug_state() {
   Serial.print(F("}\n"));
 }
 
-/*
- * Translate the command beam to output units
- * */
 void apply_command() {
   dmx_buffer.beam.pan = map(command_state.pan, PAN_MIN_ANGLE, PAN_MAX_ANGLE, 0, 255);
   dmx_buffer.beam.tilt = constrain(
@@ -351,15 +449,11 @@ void apply_command() {
       255);
   dmx_buffer.beam.dimmer = command_state.brightness;
   dmx_buffer.beam.pan_tilt_time = map(command_state.velocity, 0, 100, 0, 255);
+  motor_state.target_pwm = command_state.motor;
 }
 
-
-void command_parse_log(const ArduinoJson::DeserializationError &error) {
-  Serial.print(F(R"({"module": "command_parse", "ok": )"));
-  Serial.print(!error ? F("true") : F("false"));
-  Serial.print(F(R"(, "details": ")"));
-  Serial.print(error.f_str());
-  Serial.print(F(R"(", "command_state": {)"));
+void dump_command_state() {
+  Serial.print(F("{"));
   Serial.print(F(R"("pan": )"));
   Serial.print(command_state.pan);
   Serial.print(F(R"(, "tilt": )"));
@@ -370,9 +464,46 @@ void command_parse_log(const ArduinoJson::DeserializationError &error) {
   Serial.print(command_state.velocity);
   Serial.print(F(R"(, "motor": )"));
   Serial.print(command_state.motor);
-  Serial.print(F(R"(, "smoke": )"));
-  Serial.print(command_state.smoke);
-  Serial.print("}}\n");
+  Serial.print("}");
+}
+
+void sauronism::control_panel::control_panel_log(
+    const bool select_beam,
+    const bool select_motor,
+    const bool select_brightness,
+    const bool control_up,
+    const bool control_down,
+    const bool control_left,
+    const bool control_right
+) {
+  Serial.print(F(R"({"module": "control_panel", "select_beam": )"));
+  Serial.print(select_beam);
+  Serial.print(F(R"(, "select_motor": )"));
+  Serial.print(select_motor);
+  Serial.print(F(R"(, "select_brightness": )"));
+  Serial.print(select_brightness);
+  Serial.print(F(R"(, "control_up": )"));
+  Serial.print(control_up);
+  Serial.print(F(R"(, "control_down": )"));
+  Serial.print(control_down);
+  Serial.print(F(R"(, "control_left": )"));
+  Serial.print(control_left);
+  Serial.print(F(R"(, "control_right": )"));
+  Serial.print(control_right);
+  Serial.print(R"(, "command_state": )");
+  dump_command_state();
+  Serial.print("}\n");
+}
+
+
+void command_parse_log(const ArduinoJson::DeserializationError &error) {
+  Serial.print(F(R"({"module": "command_parse", "ok": )"));
+  Serial.print(!error ? F("true") : F("false"));
+  Serial.print(F(R"(, "details": ")"));
+  Serial.print(error.f_str());
+  Serial.print(F(R"(", "command_state": )"));
+  dump_command_state();
+  Serial.print("}\n");
 }
 
 
@@ -417,6 +548,8 @@ void setup() {
   init_dmx_buffer();
   Serial.println("Initializing Motor Controller");
   sauronism::motor::motor_init();
+  Serial.println("Initializing Control Panel");
+  sauronism::control_panel::control_panel_init();
   Serial.println("Initializing DMX Protocol");
   sauronism::dmx_protocol::dmx_init();
   apply_command();
@@ -441,14 +574,14 @@ void loop() {
   EVERY_N_MILLISECONDS(10) {
     sauronism::dmx_protocol::dmx_update();
   }
-  EVERY_N_MILLISECONDS(30) {
+  EVERY_N_MILLISECONDS(100) {
     sauronism::motor::motor_update();
   }
   EVERY_N_MILLISECONDS(100) {
-    sauronism::control_panel::update();
+    sauronism::control_panel::control_panel_update();
   }
 
-  EVERY_N_SECONDS(20) {
+  EVERY_N_SECONDS(10) {
     dump_debug_state();
   }
 }
