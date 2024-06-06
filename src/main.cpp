@@ -279,9 +279,9 @@ namespace sauronism {
 
     static void control_panel_update_motor(const bool control_up, const bool control_down) {
       if (control_up) {
-        command_state.motor = constrain(command_state.motor + 1, 0, 255);
+        command_state.motor = constrain(command_state.motor + 1, 0, 254);
       } else if (control_down) {
-        command_state.motor = constrain(command_state.motor - 1, 0, 255);
+        command_state.motor = constrain(command_state.motor - 1, 0, 254);
       }
     }
 
