@@ -205,6 +205,12 @@ namespace sauronism {
     };
 
   }
+  namespace dmx_protocol {
+    void dmx_update() {
+      for (int i = 0; i < BEAM_MAX_CHANNELS; i++) {
+        DmxSimple.write(i + 1, dmx_buffer.buffer[i]);
+      }
+    }
 
   namespace dmx_protocol {
     void dmx_update() {
